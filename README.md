@@ -19,13 +19,14 @@ It starts as a CLI application and will evolve into a Telegram bot.
 ---
 
 ## 🧱 Architecture | Архитектура
-habit_tracker/
+``` habit_tracker/
 │
 ├── main.py # CLI interface | CLI интерфейс
 ├── habits.py # program logic | логика
 ├── storage.py # JSON
 ├── models.py # data structures | структуры данных
 └── data.json # data base | база данных
+```
 
 ### Principles | Принципы:
 - Separation of logic and interface | Разделение логики и интерфейса  
