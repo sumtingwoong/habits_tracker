@@ -19,7 +19,8 @@ It starts as a CLI application and will evolve into a Telegram bot.
 ---
 
 ## 🧱 Architecture | Архитектура
-``` habit_tracker/
+``` 
+habit_tracker/
 │
 ├── main.py # CLI interface | CLI интерфейс
 ├── habits.py # program logic | логика
