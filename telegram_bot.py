@@ -14,20 +14,21 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
-from habits import add_habit, stats
+from habits import add_habit, delete_habit, stats
 from storage import load_data, save_data
 
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-_USER_ID_STR = os.getenv("USER_ID")
+USER_IDS_STR = os.getenv("USER_IDS")
 
 if not TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
-if not _USER_ID_STR:
-    raise RuntimeError("USER_ID is not set. Copy .env.example to .env and fill it in.")
+if not USER_IDS_STR:
+    raise RuntimeError("USER_IDS is not set. Copy .env.example to .env and fill it in.")
 
-USER_ID = int(_USER_ID_STR)
+# Парсим список ID
+ALLOWED_USER_IDS = [int(uid.strip()) for uid in USER_IDS_STR.split(",")]
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -38,8 +39,8 @@ dp = Dispatcher()
 # ---------------------------------------------------------------------------
 
 def _is_user(user_id: int) -> bool:
-    """Return True only for the authorised owner."""
-    return user_id == USER_ID
+    """Return True only for authorised users."""
+    return user_id in ALLOWED_USER_IDS
 
 
 def _escape_md(text: str) -> str:
@@ -98,19 +99,20 @@ async def add_handler(message: types.Message) -> None:
         await message.answer("❌ Доступ запрещён")
         return
 
+    user_id = message.from_user.id
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await message.answer("❌ Использование: /add <название привычки>")
         return
 
     habit_name = parts[1].strip()
-    data = load_data()
+    data = load_data(user_id)
 
     if habit_name in data["habits"]:
         await message.answer(f"⚠️ Привычка «{habit_name}» уже существует!")
         return
 
-    add_habit(habit_name)
+    add_habit(user_id, habit_name)
     await message.answer(f"✅ Привычка «{habit_name}» добавлена!")
 
 
@@ -124,20 +126,20 @@ async def delete_handler(message: types.Message) -> None:
         await message.answer("❌ Доступ запрещён")
         return
 
+    user_id = message.from_user.id
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip():
         await message.answer("❌ Использование: /delete <название привычки>")
         return
 
     habit_name = parts[1].strip()
-    data = load_data()
+    data = load_data(user_id)
 
     if habit_name not in data["habits"]:
         await message.answer(f"❌ Привычка «{habit_name}» не найдена!")
         return
 
-    data["habits"].remove(habit_name)
-    save_data(data)
+    delete_habit(user_id, habit_name)
     await message.answer(f"🗑 Привычка «{habit_name}» удалена!")
 
 
@@ -151,7 +153,8 @@ async def list_handler(message: types.Message) -> None:
         await message.answer("❌ Доступ запрещён")
         return
 
-    data = load_data()
+    user_id = message.from_user.id
+    data = load_data(user_id)
     habits = data["habits"]
 
     if not habits:
@@ -170,17 +173,18 @@ async def delete_callback(callback: types.CallbackQuery) -> None:
         await callback.answer("❌ Доступ запрещён")
         return
 
+    user_id = callback.from_user.id
     habit_name = callback.data[4:]
-    data = load_data()
+    data = load_data(user_id)
 
     if habit_name not in data["habits"]:
         await callback.answer("❌ Привычка не найдена!")
         return
 
-    data["habits"].remove(habit_name)
-    save_data(data)
+    delete_habit(user_id, habit_name)
     await callback.answer(f"🗑 «{habit_name}» удалена!")
 
+    data = load_data(user_id)
     habits = data["habits"]
     if not habits:
         await callback.message.edit_text("📋 Список привычек пуст.")
@@ -203,7 +207,8 @@ async def mark_handler(message: types.Message) -> None:
         await message.answer("❌ Доступ запрещён")
         return
 
-    data = load_data()
+    user_id = message.from_user.id
+    data = load_data(user_id)
     habits = data["habits"]
 
     if not habits:
@@ -247,6 +252,8 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
         await callback.answer("❌ Доступ запрещён")
         return
 
+    user_id = callback.from_user.id
+
     if callback.data.startswith("yes_"):
         habit_name = callback.data[4:]
         value = 1
@@ -254,7 +261,7 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
         habit_name = callback.data[3:]
         value = 0
 
-    data = load_data()
+    data = load_data(user_id)
     today = str(date.today())
     # Update existing entry for today if present, otherwise append
     for entry in data["entries"]:
@@ -263,7 +270,7 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
             break
     else:
         data["entries"].append({"habit": habit_name, "date": today, "value": value})
-    save_data(data)
+    save_data(user_id, data)
 
     status = "выполнена ✅" if value == 1 else "не выполнена ❌"
     await callback.message.edit_text(
@@ -281,7 +288,8 @@ async def stats_handler(message: types.Message) -> None:
         await message.answer("❌ Доступ запрещён")
         return
 
-    data = load_data()
+    user_id = message.from_user.id
+    data = load_data(user_id)
     if not data["entries"]:
         await message.answer("📊 Нет данных для статистики.")
         return
@@ -290,7 +298,7 @@ async def stats_handler(message: types.Message) -> None:
     old_stdout = sys.stdout
     sys.stdout = buf = StringIO()
     try:
-        stats()
+        stats(user_id)
     finally:
         sys.stdout = old_stdout
 

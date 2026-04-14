@@ -2,21 +2,29 @@ from storage import load_data, save_data
 from datetime import date
 
 
-def add_habit(name):
-    data = load_data()
+def add_habit(user_id: int, name: str):
+    data = load_data(user_id)
     data["habits"].append(name)
-    save_data(data)
+    save_data(user_id, data)
     print(f"Habit {name} added")
 
 
-def list_habits():
-    data = load_data()
+def delete_habit(user_id: int, name: str):
+    data = load_data(user_id)
+    if name in data["habits"]:
+        data["habits"].remove(name)
+        save_data(user_id, data)
+        print(f"Habit {name} deleted")
+
+
+def list_habits(user_id: int):
+    data = load_data(user_id)
     for i in data["habits"]:
         print(f'- {i}')
 
 
-def mark_habit(name):
-    data = load_data()
+def mark_habit(user_id: int, name: str):
+    data = load_data(user_id)
     if name not in data["habits"]:
         print('Habit not found')
         return
@@ -30,26 +38,16 @@ def mark_habit(name):
     }
 
     data["entries"].append(entry)
-    save_data(data)
+    save_data(user_id, data)
     print('Marked')
 
 
-# def stats():
-#     data = load_data()
-#
-#     result = {}
-#     for habit in data["habits"]:
-#         result[habit] = 0
-#
-#     for e in data["entries"]:
-#         if e["value"] == 1:
-#             result[e["habit"]] += 1
-#
-#     for h, count in result.items():
-#         print(f"{h}: {count} days")
+def stats(user_id: int):
+    data = load_data(user_id)
 
-def stats():
-    data = load_data()
+    if not data["entries"]:
+        print("No data yet")
+        return
 
     habits = sorted({e["habit"] for e in data["entries"]})
     dates = sorted({e["date"] for e in data["entries"]})
@@ -61,10 +59,10 @@ def stats():
     header = ["date"] + habits
     table.append(header)
 
-    for date in dates:
-        row = [date]
+    for d in dates:
+        row = [d]
         for habit in habits:
-            val = lookup.get((date, habit), 0)
+            val = lookup.get((d, habit), 0)
             row.append("✔" if val == 1 else "✖")
         table.append(row)
 

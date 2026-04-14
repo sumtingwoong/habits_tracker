@@ -1,9 +1,16 @@
-# Environment variables — never commit secrets
+# Окружение
 .env
+.env.local
 
-# Runtime data — generated at runtime, not part of source
-data.json
+# Данные пользователей
+data/
+*.json
 
-# Python bytecode
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
