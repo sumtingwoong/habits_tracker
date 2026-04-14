@@ -1,0 +1,9 @@
+# Environment variables — never commit secrets
+.env
+
+# Runtime data — generated at runtime, not part of source
+data.json
+
+# Python bytecode
+__pycache__/
+*.py[cod]
