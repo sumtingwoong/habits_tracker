@@ -282,6 +282,9 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
 # /stats
 # ---------------------------------------------------------------------------
 
+user_stats_page = {}
+
+
 @dp.message(Command("stats"))
 async def stats_handler(message: types.Message) -> None:
     if not _is_user(message.from_user.id):
@@ -289,21 +292,74 @@ async def stats_handler(message: types.Message) -> None:
         return
 
     user_id = message.from_user.id
-    data = load_data(user_id)
-    if not data["entries"]:
-        await message.answer("📊 Нет данных для статистики.")
+
+    # Reset page to 0 when starting new stats
+    user_stats_page[user_id] = 0
+
+    await show_stats_page(message.from_user.id, message)
+
+
+async def show_stats_page(user_id: int, message: types.Message) -> None:
+    """Show stats for the current page"""
+    from habits import get_stats_page
+
+    page = user_stats_page.get(user_id, 0)
+    output, has_more = get_stats_page(user_id, page=page)
+
+    # Build keyboard if there are more pages
+    keyboard = None
+    if has_more:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="⬇️ Загрузить ещё 30 дней",
+                    callback_data=f"stats_next_{user_id}"
+                )]
+            ]
+        )
+
+    await message.answer(
+        f"📊 *Статистика:* (страница {page + 1})\n{output}",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+
+@dp.callback_query(F.data.startswith("stats_next_"))
+async def stats_next_callback(callback: types.CallbackQuery) -> None:
+    if not _is_user(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён")
         return
 
-    # Capture the text table printed by stats()
-    old_stdout = sys.stdout
-    sys.stdout = buf = StringIO()
-    try:
-        stats(user_id)
-    finally:
-        sys.stdout = old_stdout
+    user_id = callback.from_user.id
 
-    output = buf.getvalue()
-    await message.answer(f"📊 *Статистика:*\n```\n{output}```", parse_mode="Markdown")
+    # Increment page
+    user_stats_page[user_id] = user_stats_page.get(user_id, 0) + 1
+
+    from habits import get_stats_page
+
+    page = user_stats_page[user_id]
+    output, has_more = get_stats_page(user_id, page=page)
+
+    # Build keyboard if there are more pages
+    keyboard = None
+    if has_more:
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="⬇️ Загрузить ещё 30 дней",
+                    callback_data=f"stats_next_{user_id}"
+                )]
+            ]
+        )
+
+    await callback.message.edit_text(
+        f"📊 *Статистика:* (страница {page + 1})\n{output}",
+        parse_mode="Markdown",
+        reply_markup=keyboard
+    )
+
+    await callback.answer("✅ Загружено!")
 
 
 # ---------------------------------------------------------------------------
