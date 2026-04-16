@@ -26,6 +26,7 @@ habit_tracker/
 ├── habits.py # program logic | логика
 ├── storage.py # JSON
 ├── models.py # data structures | структуры данных
+├── telegram_bot.py # Tg integration
 └── data.json # data base | база данных
 ```
 
