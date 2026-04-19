@@ -12,8 +12,8 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
-from habits import add_habit, get_day_stats, get_month_stats
 from storage import load_data, save_data
+from habits import get_day_stats, get_month_stats, get_week_stats
 
 load_dotenv()
 
@@ -30,9 +30,10 @@ ALLOWED_USER_IDS = {int(x.strip()) for x in USER_IDS_STR.split(",") if x.strip()
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# per-user navigation state
+# navigation state
 user_day_index: dict[int, int] = {}
 user_month_index: dict[int, int] = {}
+user_week_index: dict[int, int] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -58,51 +59,109 @@ def _build_list_keyboard(habits: list[str]) -> InlineKeyboardMarkup:
     )
 
 
-def _stats_keyboard(day_index: int, total_days: int, month_index: int, total_months: int) -> InlineKeyboardMarkup:
+def _day_stats_keyboard(day_index: int, total_days: int) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
 
     nav_row: list[InlineKeyboardButton] = []
     if total_days > 0 and day_index < total_days - 1:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущий день", callback_data="stats:day:older"))
+        nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущий день", callback_data="stats_day:older"))
     if total_days > 0 and day_index > 0:
-        nav_row.append(InlineKeyboardButton(text="➡️ Следующий день", callback_data="stats:day:newer"))
+        nav_row.append(InlineKeyboardButton(text="➡️ Следующий день", callback_data="stats_day:newer"))
     if nav_row:
         rows.append(nav_row)
 
-    rows.append([InlineKeyboardButton(text=f"День {day_index + 1}/{max(total_days, 1)}", callback_data="stats:noop")])
-
-    month_nav_row: list[InlineKeyboardButton] = []
-    if total_months > 0 and month_index < total_months - 1:
-        month_nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущий месяц", callback_data="stats:month:older"))
-    if total_months > 0 and month_index > 0:
-        month_nav_row.append(InlineKeyboardButton(text="➡️ Следующий месяц", callback_data="stats:month:newer"))
-    if month_nav_row:
-        rows.append(month_nav_row)
-
-    rows.append([InlineKeyboardButton(text=f"Месяц {month_index + 1}/{max(total_months, 1)}", callback_data="stats:noop")])
+    rows.append(
+        [InlineKeyboardButton(text=f"День {day_index + 1}/{max(total_days, 1)}", callback_data="stats_day:noop")]
+    )
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _render_stats(message: types.Message, user_id: int, edit: bool) -> None:
-    d_idx = user_day_index.get(user_id, 0)
-    m_idx = user_month_index.get(user_id, 0)
+def _month_stats_keyboard(month_index: int, total_months: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
 
-    day_text, total_days = get_day_stats(user_id, d_idx)
-    month_text, total_months = get_month_stats(user_id, m_idx)
+    nav_row: list[InlineKeyboardButton] = []
+    if total_months > 0 and month_index < total_months - 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущий месяц", callback_data="stats_month:older"))
+    if total_months > 0 and month_index > 0:
+        nav_row.append(InlineKeyboardButton(text="➡️ Следующий месяц", callback_data="stats_month:newer"))
+    if nav_row:
+        rows.append(nav_row)
 
-    kb = _stats_keyboard(d_idx, total_days, m_idx, total_months)
-
-    text = (
-        "📊 Статистика\n\n"
-        f"{day_text}\n\n"
-        f"{month_text}"
+    rows.append(
+        [InlineKeyboardButton(text=f"Месяц {month_index + 1}/{max(total_months, 1)}", callback_data="stats_month:noop")]
     )
 
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _week_stats_keyboard(week_index: int, total_weeks: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+
+    nav_row: list[InlineKeyboardButton] = []
+    if total_weeks > 0 and week_index < total_weeks - 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущая неделя", callback_data="stats_week:older"))
+    if total_weeks > 0 and week_index > 0:
+        nav_row.append(InlineKeyboardButton(text="➡️ Следующая неделя", callback_data="stats_week:newer"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append(
+        [InlineKeyboardButton(text=f"Неделя {week_index + 1}/{max(total_weeks, 1)}", callback_data="stats_week:noop")]
+    )
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_day_stats(message: types.Message, user_id: int, edit: bool) -> None:
+    idx = user_day_index.get(user_id, 0)
+    text, total = get_day_stats(user_id, idx)
+
+    if total > 0:
+        idx = min(max(idx, 0), total - 1)
+        user_day_index[user_id] = idx
+
+    kb = _day_stats_keyboard(idx, total)
+    out = f"📊 Статистика дня\n\n{text}"
+
     if edit:
-        await message.edit_text(text, reply_markup=kb)
+        await message.edit_text(out, reply_markup=kb)
     else:
-        await message.answer(text, reply_markup=kb)
+        await message.answer(out, reply_markup=kb)
+
+
+async def _render_month_stats(message: types.Message, user_id: int, edit: bool) -> None:
+    idx = user_month_index.get(user_id, 0)
+    text, total = get_month_stats(user_id, idx)
+
+    if total > 0:
+        idx = min(max(idx, 0), total - 1)
+        user_month_index[user_id] = idx
+
+    kb = _month_stats_keyboard(idx, total)
+    out = f"📊 Статистика месяца\n\n{text}"
+
+    if edit:
+        await message.edit_text(out, reply_markup=kb)
+    else:
+        await message.answer(out, reply_markup=kb)
+
+
+async def _render_week_stats(message: types.Message, user_id: int, edit: bool) -> None:
+    idx = user_week_index.get(user_id, 0)
+    text, total = get_week_stats(user_id, idx)
+
+    if total > 0:
+        idx = min(max(idx, 0), total - 1)
+        user_week_index[user_id] = idx
+
+    kb = _week_stats_keyboard(idx, total)
+    out = f"📊 Статистика недели\n\n{text}"
+
+    if edit:
+        await message.edit_text(out, reply_markup=kb)
+    else:
+        await message.answer(out, reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +177,9 @@ async def start_handler(message: types.Message) -> None:
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="/list"), KeyboardButton(text="/mark")],
-            [KeyboardButton(text="/stats"), KeyboardButton(text="/add")],
+            [KeyboardButton(text="/stats_day"), KeyboardButton(text="/stats_week")],
+            [KeyboardButton(text="/stats_month"), KeyboardButton(text="/add")],
+            [KeyboardButton(text="/delete")],
         ],
         resize_keyboard=True,
     )
@@ -129,7 +190,9 @@ async def start_handler(message: types.Message) -> None:
         "📋 /list — список привычек (с удалением)\n"
         "✅ /mark — отметить выполнение\n"
         "🗑 /delete <название> — удалить привычку\n"
-        "📊 /stats — статистика (день + месяц)",
+        "📊 /stats_day — статистика по дням\n"
+        "📊 /stats_week — статистика по неделям\n"
+        "🗓 /stats_month — статистика по месяцам",
         reply_markup=keyboard,
     )
 
@@ -157,7 +220,6 @@ async def add_handler(message: types.Message) -> None:
         await message.answer(f"⚠️ Привычка «{habit_name}» уже существует!")
         return
 
-    # Persist
     data["habits"].append(habit_name)
     save_data(user_id, data)
     await message.answer(f"✅ Привычка «{habit_name}» добавлена!")
@@ -192,7 +254,7 @@ async def delete_handler(message: types.Message) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /list  +  inline delete callback
+# /list  + inline delete
 # ---------------------------------------------------------------------------
 
 @dp.message(Command("list"))
@@ -241,13 +303,11 @@ async def delete_callback(callback: types.CallbackQuery) -> None:
         text = "📋 *Список привычек* (нажми кнопку для удаления):\n" + "\n".join(
             f"• {_escape_md(h)}" for h in habits
         )
-        await callback.message.edit_text(
-            text, reply_markup=_build_list_keyboard(habits), parse_mode="Markdown"
-        )
+        await callback.message.edit_text(text, reply_markup=_build_list_keyboard(habits), parse_mode="Markdown")
 
 
 # ---------------------------------------------------------------------------
-# /mark  +  inline habit-select and yes/no callbacks
+# /mark + callbacks
 # ---------------------------------------------------------------------------
 
 @dp.message(Command("mark"))
@@ -265,10 +325,7 @@ async def mark_handler(message: types.Message) -> None:
         return
 
     keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=h, callback_data=f"mark_{h}")]
-            for h in habits
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text=h, callback_data=f"mark_{h}")] for h in habits]
     )
     await message.answer("✏️ Выбери привычку для отметки:", reply_markup=keyboard)
 
@@ -329,57 +386,107 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /stats (day + month)
+# /stats_day
 # ---------------------------------------------------------------------------
 
-@dp.message(Command("stats"))
-async def stats_handler(message: types.Message) -> None:
+@dp.message(Command("stats_day"))
+async def stats_day_handler(message: types.Message) -> None:
     if not _is_user(message.from_user.id):
         await message.answer("❌ Доступ запрещён")
         return
-
     user_id = message.from_user.id
     user_day_index[user_id] = 0
-    user_month_index[user_id] = 0
-    await _render_stats(message, user_id, edit=False)
+    await _render_day_stats(message, user_id, edit=False)
 
 
-@dp.callback_query(F.data.startswith("stats:"))
-async def stats_callback(callback: types.CallbackQuery) -> None:
+@dp.callback_query(F.data.startswith("stats_day:"))
+async def stats_day_callback(callback: types.CallbackQuery) -> None:
     if not _is_user(callback.from_user.id):
         await callback.answer("❌ Доступ запрещён")
         return
 
     user_id = callback.from_user.id
-    _, _, scope, direction = callback.data.split(":", 3)
+    action = callback.data.split(":", 1)[1]
 
-    if scope == "day":
-        if direction == "older":
-            user_day_index[user_id] = user_day_index.get(user_id, 0) + 1
-        elif direction == "newer":
-            user_day_index[user_id] = max(user_day_index.get(user_id, 0) - 1, 0)
-    elif scope == "month":
-        if direction == "older":
-            user_month_index[user_id] = user_month_index.get(user_id, 0) + 1
-        elif direction == "newer":
-            user_month_index[user_id] = max(user_month_index.get(user_id, 0) - 1, 0)
+    if action == "older":
+        user_day_index[user_id] = user_day_index.get(user_id, 0) + 1
+    elif action == "newer":
+        user_day_index[user_id] = max(user_day_index.get(user_id, 0) - 1, 0)
+    elif action == "noop":
+        await callback.answer()
+        return
 
-    # clamp to existing ranges by re-fetching totals
-    # day
-    _, total_days = get_day_stats(user_id, user_day_index.get(user_id, 0))
-    if total_days > 0:
-        user_day_index[user_id] = min(max(user_day_index.get(user_id, 0), 0), total_days - 1)
-    else:
-        user_day_index[user_id] = 0
+    await _render_day_stats(callback.message, user_id, edit=True)
+    await callback.answer()
 
-    # month
-    _, total_months = get_month_stats(user_id, user_month_index.get(user_id, 0))
-    if total_months > 0:
-        user_month_index[user_id] = min(max(user_month_index.get(user_id, 0), 0), total_months - 1)
-    else:
-        user_month_index[user_id] = 0
 
-    await _render_stats(callback.message, user_id, edit=True)
+# ---------------------------------------------------------------------------
+# /stats_week
+# ---------------------------------------------------------------------------
+
+@dp.message(Command("stats_week"))
+async def stats_week_handler(message: types.Message) -> None:
+    if not _is_user(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    user_id = message.from_user.id
+    user_week_index[user_id] = 0
+    await _render_week_stats(message, user_id, edit=False)
+
+
+@dp.callback_query(F.data.startswith("stats_week:"))
+async def stats_week_callback(callback: types.CallbackQuery) -> None:
+    if not _is_user(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён")
+        return
+
+    user_id = callback.from_user.id
+    action = callback.data.split(":", 1)[1]
+
+    if action == "older":
+        user_week_index[user_id] = user_week_index.get(user_id, 0) + 1
+    elif action == "newer":
+        user_week_index[user_id] = max(user_week_index.get(user_id, 0) - 1, 0)
+    elif action == "noop":
+        await callback.answer()
+        return
+
+    await _render_week_stats(callback.message, user_id, edit=True)
+    await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# /stats_month
+# ---------------------------------------------------------------------------
+
+@dp.message(Command("stats_month"))
+async def stats_month_handler(message: types.Message) -> None:
+    if not _is_user(message.from_user.id):
+        await message.answer("❌ Доступ запрещён")
+        return
+    user_id = message.from_user.id
+    user_month_index[user_id] = 0
+    await _render_month_stats(message, user_id, edit=False)
+
+
+@dp.callback_query(F.data.startswith("stats_month:"))
+async def stats_month_callback(callback: types.CallbackQuery) -> None:
+    if not _is_user(callback.from_user.id):
+        await callback.answer("❌ Доступ запрещён")
+        return
+
+    user_id = callback.from_user.id
+    action = callback.data.split(":", 1)[1]
+
+    if action == "older":
+        user_month_index[user_id] = user_month_index.get(user_id, 0) + 1
+    elif action == "newer":
+        user_month_index[user_id] = max(user_month_index.get(user_id, 0) - 1, 0)
+    elif action == "noop":
+        await callback.answer()
+        return
+
+    await _render_month_stats(callback.message, user_id, edit=True)
     await callback.answer()
 
 
