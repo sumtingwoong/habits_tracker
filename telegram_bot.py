@@ -1,8 +1,6 @@
 import asyncio
 import os
-import sys
 from datetime import date
-from io import StringIO
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -14,24 +12,27 @@ from aiogram.types import (
 )
 from dotenv import load_dotenv
 
-from habits import add_habit, delete_habit, stats
+from habits import add_habit, get_day_stats, get_month_stats
 from storage import load_data, save_data
 
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-USER_IDS_STR = os.getenv("USER_IDS")
+USER_IDS_STR = os.getenv("USER_IDS")  # comma-separated list
 
 if not TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
 if not USER_IDS_STR:
     raise RuntimeError("USER_IDS is not set. Copy .env.example to .env and fill it in.")
 
-# Парсим список ID
-ALLOWED_USER_IDS = [int(uid.strip()) for uid in USER_IDS_STR.split(",")]
+ALLOWED_USER_IDS = {int(x.strip()) for x in USER_IDS_STR.split(",") if x.strip()}
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+
+# per-user navigation state
+user_day_index: dict[int, int] = {}
+user_month_index: dict[int, int] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -39,25 +40,69 @@ dp = Dispatcher()
 # ---------------------------------------------------------------------------
 
 def _is_user(user_id: int) -> bool:
-    """Return True only for authorised users."""
     return user_id in ALLOWED_USER_IDS
 
 
 def _escape_md(text: str) -> str:
-    """Escape Markdown v1 special characters in text."""
     for char in ("_", "*", "`", "["):
         text = text.replace(char, f"\\{char}")
     return text
 
 
 def _build_list_keyboard(habits: list[str]) -> InlineKeyboardMarkup:
-    """Inline keyboard where each button deletes a habit on click."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text=f"🗑 {h}", callback_data=f"del_{h}")]
             for h in habits
         ]
     )
+
+
+def _stats_keyboard(day_index: int, total_days: int, month_index: int, total_months: int) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+
+    nav_row: list[InlineKeyboardButton] = []
+    if total_days > 0 and day_index < total_days - 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущий день", callback_data="stats:day:older"))
+    if total_days > 0 and day_index > 0:
+        nav_row.append(InlineKeyboardButton(text="➡️ Следующий день", callback_data="stats:day:newer"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([InlineKeyboardButton(text=f"День {day_index + 1}/{max(total_days, 1)}", callback_data="stats:noop")])
+
+    month_nav_row: list[InlineKeyboardButton] = []
+    if total_months > 0 and month_index < total_months - 1:
+        month_nav_row.append(InlineKeyboardButton(text="⬅️ Предыдущий месяц", callback_data="stats:month:older"))
+    if total_months > 0 and month_index > 0:
+        month_nav_row.append(InlineKeyboardButton(text="➡️ Следующий месяц", callback_data="stats:month:newer"))
+    if month_nav_row:
+        rows.append(month_nav_row)
+
+    rows.append([InlineKeyboardButton(text=f"Месяц {month_index + 1}/{max(total_months, 1)}", callback_data="stats:noop")])
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _render_stats(message: types.Message, user_id: int, edit: bool) -> None:
+    d_idx = user_day_index.get(user_id, 0)
+    m_idx = user_month_index.get(user_id, 0)
+
+    day_text, total_days = get_day_stats(user_id, d_idx)
+    month_text, total_months = get_month_stats(user_id, m_idx)
+
+    kb = _stats_keyboard(d_idx, total_days, m_idx, total_months)
+
+    text = (
+        "📊 Статистика\n\n"
+        f"{day_text}\n\n"
+        f"{month_text}"
+    )
+
+    if edit:
+        await message.edit_text(text, reply_markup=kb)
+    else:
+        await message.answer(text, reply_markup=kb)
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +129,7 @@ async def start_handler(message: types.Message) -> None:
         "📋 /list — список привычек (с удалением)\n"
         "✅ /mark — отметить выполнение\n"
         "🗑 /delete <название> — удалить привычку\n"
-        "📊 /stats — статистика",
+        "📊 /stats — статистика (день + месяц)",
         reply_markup=keyboard,
     )
 
@@ -112,7 +157,9 @@ async def add_handler(message: types.Message) -> None:
         await message.answer(f"⚠️ Привычка «{habit_name}» уже существует!")
         return
 
-    add_habit(user_id, habit_name)
+    # Persist
+    data["habits"].append(habit_name)
+    save_data(user_id, data)
     await message.answer(f"✅ Привычка «{habit_name}» добавлена!")
 
 
@@ -139,7 +186,8 @@ async def delete_handler(message: types.Message) -> None:
         await message.answer(f"❌ Привычка «{habit_name}» не найдена!")
         return
 
-    delete_habit(user_id, habit_name)
+    data["habits"].remove(habit_name)
+    save_data(user_id, data)
     await message.answer(f"🗑 Привычка «{habit_name}» удалена!")
 
 
@@ -181,7 +229,8 @@ async def delete_callback(callback: types.CallbackQuery) -> None:
         await callback.answer("❌ Привычка не найдена!")
         return
 
-    delete_habit(user_id, habit_name)
+    data["habits"].remove(habit_name)
+    save_data(user_id, data)
     await callback.answer(f"🗑 «{habit_name}» удалена!")
 
     data = load_data(user_id)
@@ -263,13 +312,14 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
 
     data = load_data(user_id)
     today = str(date.today())
-    # Update existing entry for today if present, otherwise append
+
     for entry in data["entries"]:
         if entry["habit"] == habit_name and entry["date"] == today:
             entry["value"] = value
             break
     else:
         data["entries"].append({"habit": habit_name, "date": today, "value": value})
+
     save_data(user_id, data)
 
     status = "выполнена ✅" if value == 1 else "не выполнена ❌"
@@ -279,11 +329,8 @@ async def mark_confirm_callback(callback: types.CallbackQuery) -> None:
 
 
 # ---------------------------------------------------------------------------
-# /stats
+# /stats (day + month)
 # ---------------------------------------------------------------------------
-
-user_stats_page = {}
-
 
 @dp.message(Command("stats"))
 async def stats_handler(message: types.Message) -> None:
@@ -292,74 +339,48 @@ async def stats_handler(message: types.Message) -> None:
         return
 
     user_id = message.from_user.id
-
-    # Reset page to 0 when starting new stats
-    user_stats_page[user_id] = 0
-
-    await show_stats_page(message.from_user.id, message)
+    user_day_index[user_id] = 0
+    user_month_index[user_id] = 0
+    await _render_stats(message, user_id, edit=False)
 
 
-async def show_stats_page(user_id: int, message: types.Message) -> None:
-    """Show stats for the current page"""
-    from habits import get_stats_page
-
-    page = user_stats_page.get(user_id, 0)
-    output, has_more = get_stats_page(user_id, page=page)
-
-    # Build keyboard if there are more pages
-    keyboard = None
-    if has_more:
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="⬇️ Загрузить ещё 30 дней",
-                    callback_data=f"stats_next_{user_id}"
-                )]
-            ]
-        )
-
-    await message.answer(
-        f"📊 *Статистика:* (страница {page + 1})\n{output}",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
-
-
-@dp.callback_query(F.data.startswith("stats_next_"))
-async def stats_next_callback(callback: types.CallbackQuery) -> None:
+@dp.callback_query(F.data.startswith("stats:"))
+async def stats_callback(callback: types.CallbackQuery) -> None:
     if not _is_user(callback.from_user.id):
         await callback.answer("❌ Доступ запрещён")
         return
 
     user_id = callback.from_user.id
+    _, _, scope, direction = callback.data.split(":", 3)
 
-    # Increment page
-    user_stats_page[user_id] = user_stats_page.get(user_id, 0) + 1
+    if scope == "day":
+        if direction == "older":
+            user_day_index[user_id] = user_day_index.get(user_id, 0) + 1
+        elif direction == "newer":
+            user_day_index[user_id] = max(user_day_index.get(user_id, 0) - 1, 0)
+    elif scope == "month":
+        if direction == "older":
+            user_month_index[user_id] = user_month_index.get(user_id, 0) + 1
+        elif direction == "newer":
+            user_month_index[user_id] = max(user_month_index.get(user_id, 0) - 1, 0)
 
-    from habits import get_stats_page
+    # clamp to existing ranges by re-fetching totals
+    # day
+    _, total_days = get_day_stats(user_id, user_day_index.get(user_id, 0))
+    if total_days > 0:
+        user_day_index[user_id] = min(max(user_day_index.get(user_id, 0), 0), total_days - 1)
+    else:
+        user_day_index[user_id] = 0
 
-    page = user_stats_page[user_id]
-    output, has_more = get_stats_page(user_id, page=page)
+    # month
+    _, total_months = get_month_stats(user_id, user_month_index.get(user_id, 0))
+    if total_months > 0:
+        user_month_index[user_id] = min(max(user_month_index.get(user_id, 0), 0), total_months - 1)
+    else:
+        user_month_index[user_id] = 0
 
-    # Build keyboard if there are more pages
-    keyboard = None
-    if has_more:
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="⬇️ Загрузить ещё 30 дней",
-                    callback_data=f"stats_next_{user_id}"
-                )]
-            ]
-        )
-
-    await callback.message.edit_text(
-        f"📊 *Статистика:* (страница {page + 1})\n{output}",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
-
-    await callback.answer("✅ Загружено!")
+    await _render_stats(callback.message, user_id, edit=True)
+    await callback.answer()
 
 
 # ---------------------------------------------------------------------------
